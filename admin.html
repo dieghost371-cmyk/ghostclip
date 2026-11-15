@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin – Ghost Edits</title>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
+</head>
+<body>
+<header class="nav"><a class="logo" href="index.html">← Back to site</a></header>
+<div class="wrap">
+  <div class="box" id="login">
+    <h2>Admin login</h2>
+    <input class="in" id="em" type="email" placeholder="Email">
+    <input class="in" id="pw" type="password" placeholder="Password">
+    <button class="btn" id="go">Login</button><span class="ok" id="err"></span>
+    <p class="hint" id="demo" style="margin-top:12px"></p>
+  </div>
+  <div id="app" hidden>
+    <div class="box"><h2>Site text and colour</h2>
+      <input class="in" id="s-name" placeholder="Site name">
+      <input class="in" id="s-title" placeholder="Big heading">
+      <input class="in" id="s-sub" placeholder="Sub heading">
+      <input class="in" id="s-foot" placeholder="Footer text">
+      <div class="row"><label>Accent colour</label><input id="s-ac" type="color"><button class="btn y" id="s-save">Save</button><span class="ok" id="s-ok"></span></div>
+    </div>
+    <div class="box"><h2>Categories</h2><div id="cats"></div>
+      <div class="row"><input class="in" id="c-new" placeholder="New category (e.g. Phonk)"><button class="btn" id="c-add">Add</button></div>
+    </div>
+    <div class="box"><h2>Save edits on this device</h2>
+      <p class="hint">Pick videos from your gallery or computer. The anime is found from the title (character names work) and its category is created automatically. You can fix any title or anime first. These videos stay in this browser only, so visitors cannot see them. For a public site, add clips by link below.</p>
+      <input class="in" id="f" type="file" accept="video/*" multiple>
+      <div id="pend"></div>
+      <button class="btn y" id="up">Upload all</button><span class="ok" id="u-ok"></span>
+    </div>
+    <div class="box"><h2>Add clips by link</h2>
+      <select class="in" id="a-cat"></select>
+      <p class="hint">One clip per line: Title | link. Links can be YouTube, Google Drive or a direct .mp4. Paste up to 50 at once.</p>
+      <textarea class="in" id="a-list" placeholder="Naruto sad edit | https://youtu.be/xxxxxxxxxxx"></textarea>
+      <button class="btn y" id="a-add">Add clips</button><span class="ok" id="a-ok"></span>
+    </div>
+    <div class="box"><h2>All clips</h2><div id="list"></div></div>
+  </div>
+</div>
+<script src="data.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const DEMO_PASS = 'ghost123';   // used only in local demo mode
+let D;
+if (db) $('#pw').placeholder = 'Password'; else { $('#em').hidden = true; $('#demo').textContent = 'Demo mode: password is ' + DEMO_PASS + '. Data is saved only in this browser until you add your Firebase config in data.js.'; }
+
+$('#go').onclick = async () => {
+  try {
+    if (db) await auth.signInWithEmailAndPassword($('#em').value, $('#pw').value);
+    else if ($('#pw').value !== DEMO_PASS) throw Error('Wrong password');
+    D = await loadData(); L = await localAll(); $('#login').hidden = true; $('#app').hidden = false; draw();
+  } catch (e) { $('#err').textContent = e.message; }
+};
+const flash = (id, t = 'Saved ✓') => { $(id).textContent = t; setTimeout(() => $(id).textContent = '', 2000); };
+const persist = async () => { await saveData(D); draw(); };
+
+function draw() {
+  const s = D.settings;
+  $('#s-name').value = s.name; $('#s-title').value = s.title; $('#s-sub').value = s.sub; $('#s-foot').value = s.footer; $('#s-ac').value = s.accent;
+  $('#cats').innerHTML = D.cats.map((c, i) => `<span class="tag">${esc(c)} <b>${D.clips.filter(x => x.cat === c).length}</b><button data-c="${i}" aria-label="Remove">×</button></span>`).join('');
+  const keep = $('#a-cat').value;
+  $('#a-cat').innerHTML = D.cats.map(c => `<option>${esc(c)}</option>`).join(''); if (keep) $('#a-cat').value = keep;
+  const all = [...D.clips, ...L];
+  $('#list').innerHTML = all.length ? all.map(c => `<div class="item"><span>${c.local ? '💾 ' : ''}${esc(c.cat)} · ${esc(c.title)}</span><button class="del" ${c.local ? 'data-l' : 'data-d'}="${c.id}" aria-label="Delete">🗑</button></div>`).join('') : '<p class="hint">No clips yet.</p>';
+}
+
+$('#s-save').onclick = async () => {
+  D.settings = {name: $('#s-name').value, title: $('#s-title').value, sub: $('#s-sub').value, footer: $('#s-foot').value, accent: $('#s-ac').value};
+  await persist(); flash('#s-ok');
+};
+$('#c-add').onclick = async () => {
+  const v = $('#c-new').value.trim();
+  if (v && !D.cats.includes(v)) { D.cats.push(v); $('#c-new').value = ''; await persist(); }
+};
+$('#a-add').onclick = async () => {
+  const cat = $('#a-cat').value; let n = 0;
+  $('#a-list').value.split('\n').forEach((line, i) => {
+    const [t, u] = line.split('|').map(x => x.trim());
+    if (t && u) { D.clips.push({id: Date.now() + i, title: t, url: u, cat}); n++; }
+  });
+  if (n) { $('#a-list').value = ''; await persist(); }
+  flash('#a-ok', n ? n + ' added ✓' : 'Use: Title | link');
+};
+let pend = [], L = [];
+function snap(file) {
+  return new Promise(res => {
+    const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = URL.createObjectURL(file);
+    v.onloadeddata = () => { v.currentTime = Math.min(1, (v.duration || 2) / 2); };
+    v.onseeked = () => {
+      const c = document.createElement('canvas'); c.width = 480; c.height = Math.round(480 * v.videoHeight / v.videoWidth) || 270;
+      c.getContext('2d').drawImage(v, 0, 0, c.width, c.height); URL.revokeObjectURL(v.src); c.toBlob(res, 'image/jpeg', .8);
+    };
+    v.onerror = () => res(null); setTimeout(() => res(null), 8000);
+  });
+}
+$('#f').onchange = async e => {
+  pend = [...e.target.files].map(f => ({f, title: words(f.name).join(' ') || f.name.replace(/\.\w+$/, ''), anime: ''}));
+  $('#pend').innerHTML = pend.map((p, i) => `<div class="box" style="padding:12px;margin:10px 0"><input class="in" data-t="${i}" value="${esc(p.title)}"><input class="in" data-a="${i}" placeholder="Detecting anime…"><div class="hint" id="st${i}">${esc(p.f.name)}</div></div>`).join('');
+  for (let i = 0; i < pend.length; i++) {
+    const r = await findAnime(pend[i].title);
+    if (!pend[i].anime) { pend[i].anime = r ? r.anime : 'Other'; const el = document.querySelector(`[data-a="${i}"]`); if (el && !el.value) el.value = pend[i].anime; }
+  }
+};
+$('#pend').addEventListener('input', e => {
+  const t = e.target.dataset.t, a = e.target.dataset.a;
+  if (t !== undefined) pend[t].title = e.target.value;
+  if (a !== undefined) pend[a].anime = e.target.value;
+});
+$('#up').onclick = async () => {
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+  for (let i = 0; i < pend.length; i++) {
+    const p = pend[i], st = $('#st' + i);
+    try {
+      st.textContent = 'Saving…';
+      const thumb = await snap(p.f);
+      await localPut({id: Date.now() + i, title: p.title, cat: (p.anime || '').trim() || 'Other', blob: p.f, thumb});
+      st.textContent = 'Saved on this device ✓';
+    } catch (err) { st.textContent = 'Failed: ' + err.message; }
+  }
+  pend = []; $('#f').value = ''; L = await localAll(); draw(); flash('#u-ok', 'Finished');
+};
+document.addEventListener('click', async e => {
+  const c = e.target.closest('[data-c]'), d = e.target.closest('[data-d]'), l = e.target.closest('[data-l]');
+  if (c && confirm('Remove this category and all its clips?')) { const name = D.cats[c.dataset.c]; D.cats.splice(c.dataset.c, 1); D.clips = D.clips.filter(x => x.cat !== name); await persist(); }
+  if (l) { await localDel(+l.dataset.l); L = await localAll(); draw(); }
+  if (d) {
+    D.clips = D.clips.filter(x => x.id != d.dataset.d); await persist();
+  }
+});
+</script>
+</body>
+</html>
